@@ -3,11 +3,14 @@ from .models import *
 from flask import jsonify, request, current_app
 from flask_security import auth_required, roles_required, current_user, roles_accepted
 from Applications.task import send_reservation_email
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, time
 import math
+from sqlalchemy import event
 
 api = Api()
 
+
+    
 class ParkingLotResource(Resource):
     @auth_required('token')
     @roles_accepted('admin', 'user')
@@ -23,10 +26,12 @@ class ParkingLotResource(Resource):
                 "name": lot.name,
                 "address": lot.address,
                 "pin_code": lot.pin_code,
+                "min_gap_minutes": lot.min_gap_minutes,
                 "price_per_hour": lot.price_per_hour,
-                "number_of_spots": lot.number_of_spots,
-                "created_at": lot.created_at.strftime('%Y-%m-%d %H:%M:%S') if lot.created_at else None
-            }
+                "Total_number_of_slots": lot.number_of_spots,
+                "created_at": lot.created_at.strftime('%Y-%m-%d %H:%M:%S') if lot.created_at else None,
+                #"available_slots": len([s for s in lot.slots if s.status == 'A'])
+        } 
             lots_json.append(lot_data)
         return lots_json, 200
     
@@ -329,16 +334,255 @@ class AdminSubscriptionResource(Resource):
             "end_date": sub.end_date.strftime('%Y-%m-%d') if sub.end_date else None,
             "is_active": sub.is_active
         } for sub in subscriptions])
+    
+def check_availability(slot_id, requested_start, requested_end):
+    """
+    Check slot availability with gap policy (24/7 operation)
+    Returns tuple: (is_available, error_dict, suggestion_dict)
+    """
+    slot = ParkingSpot.query.get(slot_id)
+    if not slot:
+        return False, {"message": "Slot not found"}, None
 
-# Add these resources to your API
-api.add_resource(SubscriptionResource, '/api/subscriptions',"/api/subscriptions/<int:plan_id>")
+    gap = timedelta(minutes=slot.lot.min_gap_minutes)
+    
+    # Check for conflicts with gap (no operating hours check)
+    conflicts = Reservation.query.filter(
+        Reservation.slot_id == slot_id,
+        Reservation.status == 'confirmed',
+        Reservation.start_datetime < (requested_end + gap),
+        Reservation.end_datetime > (requested_start - gap)
+    ).order_by(Reservation.start_datetime).all()
+
+    if not conflicts:
+        return True, None, None  # Available
+
+    # Find suggestion before first conflict
+    first_conflict = conflicts[0]
+    available_end = first_conflict.start_datetime - gap
+    if requested_start < available_end:
+        suggestion = {
+            'start': requested_start,
+            'end': min(available_end, requested_end),
+            'reason': f"Available before reservation at {first_conflict.start_datetime}",
+            'conflict_time': first_conflict.start_datetime
+        }
+        if (suggestion['end'] - suggestion['start']) >= timedelta(hours=1):
+            return False, {
+                'message': 'Time slot unavailable with gap policy',
+                'conflict_time': first_conflict.start_datetime,
+                'type': 'before'
+            }, suggestion
+
+    # Find suggestion after last conflict
+    last_conflict = conflicts[-1]
+    available_start = last_conflict.end_datetime + gap
+    if available_start < requested_end:
+        suggestion = {
+            'start': max(available_start, requested_start),
+            'end': requested_end,
+            'reason': f"Available after reservation at {last_conflict.end_datetime}",
+            'conflict_time': last_conflict.end_datetime
+        }
+        if (suggestion['end'] - suggestion['start']) >= timedelta(hours=1):
+            return False, {
+                'message': 'Time slot unavailable with gap policy',
+                'conflict_time': last_conflict.end_datetime,
+                'type': 'after'
+            }, suggestion
+
+    return False, {"message": "No available slots with gap policy"}, None
+
+
+# Automatically update slot status when reservations change
+@event.listens_for(Reservation, 'after_insert')
+@event.listens_for(Reservation, 'after_update')
+@event.listens_for(Reservation, 'after_delete')
+def update_slot_status(mapper, connection, target):
+    slot = ParkingSpot.query.get(target.slot_id)
+    if slot:
+        slot.update_status()
+
+
+
+class SlotResource(Resource):
+    @auth_required('token')
+    def get(self, lot_id):
+        """Get all slots with availability for a lot"""
+        slots = ParkingSpot.query.filter_by(lot_id=lot_id).order_by(ParkingSpot.slot_number).all()
+        
+        return jsonify([{
+            "slot_number": s.slot_number,
+            "status": s.status,
+            "reservations": [{
+                "start": r.start_datetime.isoformat(),
+                "end": r.end_datetime.isoformat(),
+                "user": r.user.username
+            } for r in s.reservations if r.status == 'confirmed']
+        } for s in slots])
+
+class ReservationResource(Resource):
+    @auth_required('token')
+    @roles_required('user')
+    def post(self):
+        """Create a new reservation with time validation"""
+        data = request.get_json()
+        
+        try:
+            lot_id = data['lot_id']
+            slot_number = data['slot_number']
+            start_datetime = datetime.fromisoformat(data['start_datetime'])
+            end_datetime = datetime.fromisoformat(data['end_datetime'])
+            vehicle_number = data['vehicle_number']
+        except (KeyError, ValueError) as e:
+            return {"message": f"Invalid request data: {str(e)}"}, 400
+
+        # Get the specific slot
+        slot = ParkingSpot.query.filter_by(
+            lot_id=lot_id,
+            slot_number=slot_number
+        ).first()
+        
+        if not slot:
+            return {"message": "Slot not found"}, 404
+            
+        # Check current availability
+        if slot.status == 'O':
+            return {"message": f"Slot {slot_number} is currently occupied"}, 400
+
+        # Check time availability with gap policy
+        is_available, error, suggestion = check_availability(
+            slot.id, start_datetime, end_datetime
+        )
+
+        if not is_available:
+            if suggestion:
+                return {
+                    "code": "TIME_CONFLICT",
+                    "message": error['message'],
+                    "suggestion": {
+                        "start": suggestion['start'].isoformat(),
+                        "end": suggestion['end'].isoformat(),
+                        "reason": suggestion['reason']
+                    }
+                }, 409
+            return {"message": error['message']}, 400
+
+        # Create reservation
+        reservation = Reservation(
+            slot_id=slot.id,
+            user_id=current_user.id,
+            start_datetime=start_datetime,
+            end_datetime=end_datetime,
+            vehicle_number=vehicle_number
+        )
+
+        db.session.add(reservation)
+        db.session.commit()
+
+        # Send confirmation email
+        send_reservation_email(
+            to_email=current_user.email,
+            subject="Parking Reservation Confirmed",
+            body=f"""
+            Your parking reservation for Slot {slot_number} is confirmed.
+            Time: {start_datetime} to {end_datetime}
+            Vehicle: {vehicle_number}
+            """
+        )
+
+        return {
+            "message": f"Reservation for Slot {slot_number} created successfully",
+            "reservation_id": reservation.id,
+            "slot_status": slot.status
+        }, 201
+
+    @auth_required('token')
+    def get(self):
+        """Get user's reservations"""
+        reservations = Reservation.query.filter_by(
+            user_id=current_user.id
+        ).order_by(Reservation.start_datetime).all()
+
+        return jsonify([{
+            "id": r.id,
+            "slot_number": r.slot.slot_number,
+            "lot_name": r.slot.lot.name,
+            "start": r.start_datetime.isoformat(),
+            "end": r.end_datetime.isoformat(),
+            "vehicle_number": r.vehicle_number,
+            "status": r.status
+        } for r in reservations])
+
+class AvailabilityResource(Resource):
+    @auth_required('token')
+    def get(self, lot_id):
+        """Get available time slots (24/7 operation)"""
+        date_str = request.args.get('date')
+        duration_hours = float(request.args.get('duration', 1))
+        
+        try:
+            date = datetime.strptime(date_str, '%Y-%m-%d').date() if date_str else datetime.now().date()
+        except ValueError:
+            return {"message": "Invalid date format. Use YYYY-MM-DD"}, 400
+
+        slots = ParkingSpot.query.filter_by(lot_id=lot_id).all()
+        available_slots = []
+
+        for slot in slots:
+            # Get existing reservations for the day
+            reservations = Reservation.query.filter(
+                Reservation.slot_id == slot.id,
+                db.func.date(Reservation.start_datetime) == date,
+                Reservation.status == 'confirmed'
+            ).order_by(Reservation.start_datetime).all()
+
+            # Generate available time windows (24 hours)
+            current_time = datetime.combine(date, time(0, 0))  # Start at midnight
+            end_of_day = datetime.combine(date, time(23, 59, 59))  # End at midnight
+            gap = timedelta(minutes=slot.lot.min_gap_minutes)
+            duration = timedelta(hours=duration_hours)
+
+            for res in reservations:
+                available_end = res.start_datetime - gap
+                if current_time < available_end and (available_end - current_time) >= duration:
+                    available_slots.append({
+                        "slot_number": slot.slot_number,
+                        "start": current_time,
+                        "end": available_end
+                    })
+                current_time = res.end_datetime + gap
+
+            # Add remaining time after last reservation
+            if current_time < end_of_day and (end_of_day - current_time) >= duration:
+                available_slots.append({
+                    "slot_number": slot.slot_number,
+                    "start": current_time,
+                    "end": end_of_day
+                })
+
+        return jsonify([{
+            "slot_number": s['slot_number'],
+            "start": s['start'].isoformat(),
+            "end": s['end'].isoformat(),
+            "duration_hours": duration_hours
+        } for s in available_slots])
+
+
+
+
+# --- Routes for Admin and User ---
+api.add_resource(ParkingLotResource, '/api/parking_lot', '/api/parking_lot/<int:lot_id>')
+api.add_resource(SlotResource, '/api/lots/<int:lot_id>/slots')
+api.add_resource(ReservationResource, '/api/reservations')
+api.add_resource(AvailabilityResource, '/api/lots/<int:lot_id>/availability')
+
+# --- User Features ---
+api.add_resource(UserReservationResource, '/api/user/reservations')
 api.add_resource(UserSubscriptionResource, '/api/user/subscriptions')
-api.add_resource(AdminSubscriptionResource, '/api/admin/subscriptions')  # New admin endpoint
 api.add_resource(PaymentResource, '/api/payments')
 api.add_resource(ValetResource, '/api/valet')
 
-api.add_resource(ParkingLotResource, 
-    '/api/parking_lot',  # For POST and GET all
-    '/api/parking_lot/<int:lot_id>',  # For GET single, PUT, DELETE
-    endpoint='parking_lot')
-api.add_resource(UserReservationResource, '/api/reservations')
+# --- Subscription Plans ---
+api.add_resource(SubscriptionResource, '/api/subscriptions', "/api/subscriptions/<int:plan_id>")
+api.add_resource(AdminSubscriptionResource, '/api/admin/subscriptions')

@@ -1,4 +1,4 @@
-from flask import current_app as app, jsonify, request
+from flask import current_app as app, jsonify, request, render_template
 from flask_security import auth_required, roles_required, current_user, hash_password
 from .database import db
 from .models import User, Role, ParkingLot, ParkingSpot, Reservation
@@ -7,7 +7,7 @@ from datetime import datetime, timedelta
 
 @app.route('/',methods = ['GET'])
 def home():
-    return "<h1>Welcome to Vehicle Parking System Home page</h1>"
+    return render_template('index.html')
 
 @app.route('/admin')
 @auth_required('token') #authentication

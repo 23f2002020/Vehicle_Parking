@@ -31,25 +31,66 @@ class ParkingLot(db.Model):
     address = db.Column(db.String(255), nullable=False)
     pin_code = db.Column(db.String(6), nullable=False)
     price_per_hour = db.Column(db.Float, nullable=False)
+    min_gap_minutes = db.Column(db.Integer, default=60)
     number_of_spots = db.Column(db.Integer, nullable=False)
     created_at = db.Column(db.DateTime, default=datetime.utcnow)
     spots = db.relationship('ParkingSpot', backref='lot', lazy=True)
+
+    @property
+    def available_spots_count(self):
+        return ParkingSpot.query.filter_by(lot_id=self.id, status='A').count()
+    
+    @property
+    def occupied_spots_count(self):
+        return self.total_spots - self.available_spots_count
+
+    def initialize_slots(self):
+        """Create numbered slots when lot is created"""
+        for number in range(1, self.total_slots + 1):
+            slot = ParkingSpot(
+                lot_id=self.id,
+                slot_number=number,
+                status='A'
+            )
+            db.session.add(slot)
+        db.session.commit()
 
 class ParkingSpot(db.Model):
     id = db.Column(db.Integer, primary_key=True)
     lot_id = db.Column(db.Integer, db.ForeignKey('parking_lot.id', ondelete='CASCADE'))
     status = db.Column(db.String(1), default='A')  # A - Available, O - Occupied
+    slot_number = db.Column(db.Integer, nullable=False)
     vehicle_number = db.Column(db.String(15), nullable=True)
     reservations = db.relationship('Reservation', backref='spot', lazy=True)
 
+    def update_status(self):
+        """Update status based on current reservations"""
+        now = datetime.utcnow()
+        active_reservation = Reservation.query.filter(
+            Reservation.slot_id == self.id,
+            Reservation.start_datetime <= now,
+            Reservation.end_datetime >= now,
+            Reservation.status == 'confirmed'
+        ).first()
+        
+        self.status = 'O' if active_reservation else 'A'
+        db.session.commit()
+        return self.status
+
 class Reservation(db.Model):
     id = db.Column(db.Integer, primary_key=True)
-    spot_id = db.Column(db.Integer, db.ForeignKey('parking_spot.id', ondelete='CASCADE'))
+    slot_id = db.Column(db.Integer, db.ForeignKey('parking_spot.id', ondelete='CASCADE'))
     user_id = db.Column(db.Integer, db.ForeignKey('user.id', ondelete='CASCADE'))
+    status = db.Column(db.String(20), default='confirmed')
+    start_datetime = db.Column(db.DateTime, nullable=False)
+    end_datetime = db.Column(db.DateTime, nullable=False)
     parking_timestamp = db.Column(db.DateTime, default=datetime.utcnow)
     hours_needed = db.Column(db.Integer, nullable=False)
     leaving_timestamp = db.Column(db.DateTime, nullable=True)
     parking_cost = db.Column(db.Float, nullable=True)
+    __table_args__ = (
+        db.Index('idx_reservation_slot_datetime', 'slot_id', 'start_datetime', 'end_datetime'),
+    )
 
 class SubscriptionPlan(db.Model):
     id = db.Column(db.Integer, primary_key=True)
