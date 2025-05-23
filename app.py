@@ -3,8 +3,8 @@ from Applications.database import db
 from Applications.models import User, Role, ParkingLot, ParkingSpot, Reservation, SubscriptionPlan
 from Applications.config import LocalConfig
 from Applications.resources import api
-from flask_security import Security, SQLAlchemyUserDatastore, hash_password
-
+from flask_security import Security, SQLAlchemyUserDatastore
+from werkzeug.security import check_password_hash, generate_password_hash
 
 def create_app():
     app = Flask(__name__)
@@ -24,10 +24,10 @@ with app.app_context():
     app.security.datastore.find_or_create_role(name='user', description='User')
     db.session.commit()
     if not app.security.datastore.find_user(email = 'user@admin.com'):
-        app.security.datastore.create_user(email = 'user@admin.com', username='admin', password = hash_password("password"), active = True, roles = ['admin'])
+        app.security.datastore.create_user(email = 'user@admin.com', username='admin', password = generate_password_hash("password"), active = True, roles = ['admin'])
 
     if not app.security.datastore.find_user(email = 'user@user.com'):
-        app.security.datastore.create_user(email = 'user@user.com', username='user1', password = hash_password('password'), active = True, roles = ['user'])
+        app.security.datastore.create_user(email = 'user@user.com', username='user1', password = generate_password_hash('password'), active = True, roles = ['user'])
       
     if not SubscriptionPlan.query.first():
         plans = [

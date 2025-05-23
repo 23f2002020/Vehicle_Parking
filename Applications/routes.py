@@ -1,9 +1,10 @@
 from flask import current_app as app, jsonify, request, render_template
-from flask_security import auth_required, roles_required, current_user, hash_password
+from flask_security import auth_required, roles_required, roles_accepted, current_user, hash_password,login_user, logout_user, verify_and_update_password
 from .database import db
 from .models import User, Role, ParkingLot, ParkingSpot, Reservation
 from .models import  SubscriptionPlan, UserSubscription, PaymentTransaction
 from datetime import datetime, timedelta
+from werkzeug.security import check_password_hash, generate_password_hash
 
 @app.route('/',methods = ['GET'])
 def home():
@@ -17,17 +18,56 @@ def admin():
         "message": "Hello Admin! you have successfully logged in"
         })
 
-@app.route('/user')
+@app.route('/api/home')
 @auth_required('token') #authentication
-@roles_required(['user', 'admin']) #authorization
-def user():
-    user = current_user
+@roles_accepted('user', 'admin') #authorization
+
+def user_home():
+    user=current_user
     return jsonify({
-        "message": "Hello User! you have successfully logged in",
-        "username": user.username,
+        "message": f"Hello {user.username}! you have successfully logged in",
         "email": user.email,
+        "username": user.username,
         "password": user.password
-        })
+    })
+
+@app.route('/api/login', methods=['POST'])
+
+def custom_login():
+    data = request.get_json()
+    email = data.get('email')
+    password = data.get('password')
+
+    if not email or not password:
+        return jsonify({"message": "Email and password are required"}), 400
+
+    user = app.security.datastore.find_user(email=email)
+    if not user:
+        return jsonify({"message": "User not found"}), 404
+
+    # ✅ If another user is logged in, log them out
+    if current_user.is_authenticated:
+        if current_user.id != user.id:
+            logout_user()  # Logout previous user
+        else:
+            return jsonify({"message": "User already logged in"}), 400
+
+    # ✅ Check password
+    if not verify_and_update_password(password, user):
+        return jsonify({"message": "Incorrect password"}), 401
+
+    login_user(user)
+    
+    return jsonify({
+        "message": "Login successful",
+        "user": {
+            "auth_token": user.get_auth_token(),
+            "username": user.username,
+            "email": user.email
+        }
+    }), 200
+    
+   
 
 @app.route('/api/register', methods=['POST'])
 def create_user():

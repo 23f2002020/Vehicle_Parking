@@ -13,4 +13,5 @@ class LocalConfig(config):
     SECURITY_PASSWORD_SALT = "security_password_salt" #helps hashing a password
     WTF_CSRF_ENABLED = False
     SECURITY_TOKEN_AUTHENTICATION_HEADER = "Authentication-token"
+    SECURITY_TOKEN_AUTHENTICATION_KEY = "auth_token"
     JWT_SECRET_KEY = "jwt_secret_key"
