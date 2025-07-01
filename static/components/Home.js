@@ -1,10 +1,9 @@
+
 export default{
     template:`
     <div class ="row border">
-        <div class="col" style="height:570px;">
-            <div class="border mx-auto mt-5" style="height:450px;width:350px;">
-                Landing Page
-            </div>
+        <div class="col" style="height: 600px;">
+            <img src="static/image2.png" alt="Home" style="width: 100%; height: 89vh; object-fit: contain;">
         </div>
     </div>
     `

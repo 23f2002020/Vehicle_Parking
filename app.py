@@ -1,10 +1,10 @@
-from flask import Flask
+from flask import Flask, send_from_directory
 from Applications.database import db
-from Applications.models import User, Role, ParkingLot, ParkingSpot, Reservation, SubscriptionPlan
+from Applications.models import User, Role, ParkingLot, ParkingSpot, Reservation, SubscriptionPlan, Admin
 from Applications.config import LocalConfig
 from Applications.resources import api
 from flask_security import Security, SQLAlchemyUserDatastore
-from werkzeug.security import check_password_hash, generate_password_hash
+from werkzeug.security import generate_password_hash
 
 def create_app():
     app = Flask(__name__)
@@ -23,47 +23,75 @@ with app.app_context():
     app.security.datastore.find_or_create_role(name='admin', description='Administrator')
     app.security.datastore.find_or_create_role(name='user', description='User')
     db.session.commit()
-    if not app.security.datastore.find_user(email = 'user@admin.com'):
-        app.security.datastore.create_user(email = 'user@admin.com', username='admin', password = generate_password_hash("password"), active = True, roles = ['admin'])
 
-    if not app.security.datastore.find_user(email = 'user@user.com'):
-        app.security.datastore.create_user(email = 'user@user.com', username='user1', password = generate_password_hash('password'), active = True, roles = ['user'])
-      
+    from Applications.models import ParkingLot
+    for lot in ParkingLot.query.all():
+        lot.initialize_slots()
+
+
+    if not Admin.query.filter_by(email='user@admin.com').first():
+        admin = Admin(
+            username='admin',
+            email='user@admin.com',
+            password_hash=generate_password_hash("password")
+        )
+        db.session.add(admin)
+
+    if not app.security.datastore.find_user(email='user@user.com'):
+        app.security.datastore.create_user(
+            email='user@user.com',
+            username='user1',
+            password=generate_password_hash('password'),
+            active=True,
+            roles=['user']
+        )
+
     if not SubscriptionPlan.query.first():
         plans = [
             SubscriptionPlan(
                 name="1-month",
+                plan_type="user",
+                billing_interval="monthly",
                 duration_days=30,
                 price=1299,
                 free_parkings=2,
                 free_washes=0,
+                currency='INR',
                 description="Basic plan with 2 free parkings"
             ),
             SubscriptionPlan(
                 name="6-month",
+                plan_type="user",
+                billing_interval="monthly",
                 duration_days=180,
                 price=4499,
                 free_parkings=15,
                 free_washes=3,
+                currency='INR',
                 description="Popular plan with 15 parkings and 3 free washes"
             ),
             SubscriptionPlan(
                 name="1-year",
+                plan_type="user",
+                billing_interval="annually",
                 duration_days=365,
                 price=9599,
                 free_parkings=31,
                 free_washes=10,
+                currency='INR',
                 description="Best value with 31 parkings and 10 free washes"
             )
         ]
         db.session.add_all(plans)
-        db.session.commit()
-
     db.session.commit()
-    
-#-->hashed_password = bcrypt(password , salt)
 
-from Applications.routes import *
+@app.route('/static/uploads/<filename>')
+def uploaded_file(filename):
+    return send_from_directory('static/uploads', filename)
+
+# Register blueprint AFTER app is created and initialized
+from Applications.routes import routes_bp
+app.register_blueprint(routes_bp)
 
 if __name__ == '__main__':
-    app.run(debug=True)  
+    app.run(debug=True)

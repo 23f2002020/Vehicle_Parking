@@ -14,11 +14,34 @@ class User(db.Model, UserMixin):
     password = db.Column(db.String, nullable=False)
     fs_uniquifier = db.Column(db.String, unique=True, nullable=False)
     active = db.Column(db.Boolean, default=True)
-    roles = db.relationship('Role', backref='bearer', secondary='user_roles')
-    reservations = db.relationship('Reservation', backref='user', lazy=True)
-    subscriptions = db.relationship('UserSubscription', backref='user', lazy=True)
-    payments = db.relationship('PaymentTransaction', backref='user', lazy=True)
+    roles = db.relationship('Role', secondary='user_roles', backref='users')
+    
+    # Free allowance for users
+    free_parking_minutes_allowed = db.Column(db.Integer, default=240) # 4 hours * 60 minutes
+    free_parking_minutes_used = db.Column(db.Integer, default=0)
+    free_parking_last_reset_date = db.Column(db.DateTime, default=datetime.utcnow)
+    current_user_subscription_id = db.Column(db.Integer, db.ForeignKey('user_subscription.id'))
+    created_at = db.Column(db.DateTime, default=datetime.utcnow)
     valet_requests = db.relationship('ValetRequest', backref='user', lazy=True)
+    
+    def __repr__(self):
+        return f'<User {self.username}>'
+
+class Admin(db.Model):
+    id = db.Column(db.Integer, primary_key=True)
+    username = db.Column(db.String(64), unique=True, nullable=False)
+    email = db.Column(db.String(120), unique=True, nullable=False)
+    password_hash = db.Column(db.String(128))
+    
+    # Free allowance for admins
+    free_spots_allowed = db.Column(db.Integer, default=2)
+    free_spots_used = db.Column(db.Integer, default=0)
+    is_on_free_tier = db.Column(db.Boolean, default=True)
+    current_admin_subscription_id = db.Column(db.Integer, db.ForeignKey('admin_subscription.id'))
+    created_at = db.Column(db.DateTime, default=datetime.utcnow)
+
+    def __repr__(self):
+        return f'<Admin {self.username}>'
 
 class UserRoles(db.Model):
     id = db.Column(db.Integer, primary_key=True)
@@ -30,11 +53,32 @@ class ParkingLot(db.Model):
     name = db.Column(db.String(100), nullable=False)
     address = db.Column(db.String(255), nullable=False)
     pin_code = db.Column(db.String(6), nullable=False)
-    price_per_hour = db.Column(db.Float, nullable=False)
-    min_gap_minutes = db.Column(db.Integer, default=60)
+
+    # Admin and Supervisor
+    admin_id = db.Column(db.Integer, db.ForeignKey('user.id'), nullable=False)
+    supervisor_name = db.Column(db.String(100), nullable=True)
+
+    # Dimensions
+    rows = db.Column(db.Integer, nullable=False)
+    columns = db.Column(db.Integer, nullable=False)
+    floors = db.Column(db.Integer, default=1)
+
+    # Derived attributes
     number_of_spots = db.Column(db.Integer, nullable=False)
+    price_per_hour = db.Column(db.Float, nullable=False)
+
+    # Optional features
+    charging_available = db.Column(db.Boolean, default=False)
+    water_wash_available = db.Column(db.Boolean, default=False)
+    other_services = db.Column(db.String(255), nullable=True)
+
+    # Timestamps
     created_at = db.Column(db.DateTime, default=datetime.utcnow)
-    spots = db.relationship('ParkingSpot', backref='lot', lazy=True)
+    updated_at = db.Column(db.DateTime, onupdate=datetime.utcnow)
+
+    # Relationships
+    admin = db.relationship('User', backref='parking_lots')
+    slots = db.relationship('ParkingSpot', backref='lot', lazy=True)
 
     @property
     def available_spots_count(self):
@@ -42,11 +86,15 @@ class ParkingLot(db.Model):
     
     @property
     def occupied_spots_count(self):
-        return self.total_spots - self.available_spots_count
+        return self.number_of_spots - self.available_spots_count
 
     def initialize_slots(self):
         """Create numbered slots when lot is created"""
-        for number in range(1, self.total_slots + 1):
+        existing = ParkingSpot.query.filter_by(lot_id=self.id).count()
+        if existing > 0:
+            return  # Don't re-initialize if slots already exist
+
+        for number in range(1, self.number_of_spots + 1):
             slot = ParkingSpot(
                 lot_id=self.id,
                 slot_number=number,
@@ -88,28 +136,94 @@ class Reservation(db.Model):
     hours_needed = db.Column(db.Integer, nullable=False)
     leaving_timestamp = db.Column(db.DateTime, nullable=True)
     parking_cost = db.Column(db.Float, nullable=True)
+    
     __table_args__ = (
         db.Index('idx_reservation_slot_datetime', 'slot_id', 'start_datetime', 'end_datetime'),
     )
 
 class SubscriptionPlan(db.Model):
     id = db.Column(db.Integer, primary_key=True)
-    name = db.Column(db.String(50), nullable=False)
-    duration_days = db.Column(db.Integer, nullable=False)
-    price = db.Column(db.Float, nullable=False)
-    free_parkings = db.Column(db.Integer, nullable=False)
+    name = db.Column(db.String(64), unique=True, nullable=False)
+    plan_type = db.Column(db.String(10), nullable=False)  # 'user' or 'admin'
+    description = db.Column(db.Text)
+    price = db.Column(db.Numeric(10, 2), nullable=False)
+    currency = db.Column(db.String(3), default='INR')
+    billing_interval = db.Column(db.String(10), nullable=False)  # 'monthly', 'annually'
+
+    # Add these fields to support your new logic
+    duration_days = db.Column(db.Integer, nullable=False, default=30)
+    free_parkings = db.Column(db.Integer, default=0)
     free_washes = db.Column(db.Integer, default=0)
-    description = db.Column(db.String(255))
+
+    max_spots = db.Column(db.Integer)  # Nullable for user plans or unlimited admin plans
+    max_parking_hours_monthly = db.Column(db.Integer)  # Nullable for admin plans or unlimited user plans
+    features_json = db.Column(db.Text)  # Optional: JSON for future extensibility
+    is_active = db.Column(db.Boolean, default=True)
+
+    def __repr__(self):
+        return f'<SubscriptionPlan {self.name}>'
+
 
 class UserSubscription(db.Model):
     id = db.Column(db.Integer, primary_key=True)
-    user_id = db.Column(db.Integer, db.ForeignKey('user.id', ondelete='CASCADE'))
-    plan_id = db.Column(db.Integer, db.ForeignKey('subscription_plan.id', ondelete='CASCADE'))
+    user_id = db.Column(db.Integer, db.ForeignKey('user.id', name='fk_user_subscription_user'), nullable=False)
+    plan_id = db.Column(db.Integer, db.ForeignKey('subscription_plan.id'), nullable=False)
     start_date = db.Column(db.DateTime, default=datetime.utcnow)
     end_date = db.Column(db.DateTime)
-    remaining_parkings = db.Column(db.Integer)
-    remaining_washes = db.Column(db.Integer, default=0)
-    is_active = db.Column(db.Boolean, default=True)
+    status = db.Column(db.String(20), default='active')
+    auto_renew = db.Column(db.Boolean, default=True)
+    last_payment_date = db.Column(db.DateTime)
+    next_billing_date = db.Column(db.DateTime)
+    stripe_customer_id = db.Column(db.String(100))
+    stripe_subscription_id = db.Column(db.String(100))
+
+    # Explicit relationship with foreign_keys specified
+    user = db.relationship('User', foreign_keys=[user_id], backref=db.backref('subscriptions', lazy=True))
+    plan = db.relationship('SubscriptionPlan', backref='user_subscriptions', lazy=True)
+
+    def __repr__(self):
+        return f'<UserSubscription User:{self.user_id} Plan:{self.plan_id} Status:{self.status}>'
+
+class AdminSubscription(db.Model):
+    id = db.Column(db.Integer, primary_key=True)
+    admin_id = db.Column(db.Integer, db.ForeignKey('admin.id', name='fk_admin_subscription_admin'), nullable=False)
+    plan_id = db.Column(db.Integer, db.ForeignKey('subscription_plan.id'), nullable=False)
+    start_date = db.Column(db.DateTime, default=datetime.utcnow)
+    end_date = db.Column(db.DateTime)
+    status = db.Column(db.String(20), default='active')
+    auto_renew = db.Column(db.Boolean, default=True)
+    last_payment_date = db.Column(db.DateTime)
+    next_billing_date = db.Column(db.DateTime)
+    stripe_customer_id = db.Column(db.String(100))
+    stripe_subscription_id = db.Column(db.String(100))
+
+    # Explicit relationship with foreign_keys specified
+    admin = db.relationship('Admin', foreign_keys=[admin_id], backref=db.backref('subscriptions', lazy=True))
+    plan = db.relationship('SubscriptionPlan', backref='admin_subscriptions', lazy=True)
+
+    def __repr__(self):
+        return f'<AdminSubscription Admin:{self.admin_id} Plan:{self.plan_id} Status:{self.status}>'
+
+class ParkingSession(db.Model):
+    id = db.Column(db.Integer, primary_key=True)
+    user_id = db.Column(db.Integer, db.ForeignKey('user.id'), nullable=True)
+    admin_id = db.Column(db.Integer, db.ForeignKey('admin.id'), nullable=True)
+    spot_id = db.Column(db.Integer, db.ForeignKey('parking_spot.id'), nullable=False)
+    vehicle_license_plate = db.Column(db.String(20), nullable=False)
+    start_time = db.Column(db.DateTime, default=datetime.utcnow)
+    end_time = db.Column(db.DateTime)
+    duration_minutes = db.Column(db.Integer)
+    cost = db.Column(db.Numeric(10, 2))
+    is_free_session = db.Column(db.Boolean, default=False)
+    free_minutes_consumed = db.Column(db.Integer, default=0)
+    status = db.Column(db.String(20), default='active')
+
+    user = db.relationship('User', backref='parking_sessions', lazy=True)
+    admin = db.relationship('Admin', backref='managed_parking_sessions', lazy=True)
+    parking_spot = db.relationship('ParkingSpot', backref='parking_sessions', lazy=True)
+
+    def __repr__(self):
+        return f'<ParkingSession {self.id} Spot:{self.spot_id} Status:{self.status}>'
 
 class PaymentTransaction(db.Model):
     id = db.Column(db.Integer, primary_key=True)

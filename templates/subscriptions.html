@@ -1,0 +1,55 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>My Subscription</title>
+  <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/css/bootstrap.min.css" rel="stylesheet">
+</head>
+<body>
+  <div class="container py-5">
+    <h2 class="mb-4">My Subscription</h2>
+
+    {% if current_sub %}
+      <div class="card mb-3">
+        <div class="card-body">
+          <h5 class="card-title">Current Plan: {{ current_sub.plan.name }}</h5>
+          <p class="card-text">Status: <strong>{{ current_sub.status }}</strong></p>
+          <p class="card-text">Next Billing Date: {{ current_sub.next_billing_date.strftime('%Y-%m-%d') if current_sub.next_billing_date else 'N/A' }}</p>
+
+          {% if current_sub.plan.plan_type == 'user' %}
+            <p class="card-text">Monthly Parking Hours: {{ current_sub.plan.max_parking_hours_monthly if current_sub.plan.max_parking_hours_monthly else 'Unlimited' }}</p>
+          {% elif current_sub.plan.plan_type == 'admin' %}
+            <p class="card-text">Managed Spots: {{ current_sub.plan.max_spots if current_sub.plan.max_spots else 'Unlimited' }}</p>
+          {% endif %}
+        </div>
+      </div>
+    {% else %}
+      <div class="alert alert-warning">You are currently on the free tier.</div>
+    {% endif %}
+
+    {% if free_allowance_info %}
+      <div class="card">
+        <div class="card-body">
+          <h5 class="card-title">Free Allowance Status</h5>
+
+          {% if free_allowance_info.allowed == 240 %} {# User free minutes #}
+            <p>Total Free Parking Allowed: {{ free_allowance_info.allowed / 60 }} hours</p>
+            <p>Free Parking Used This Cycle: {{ free_allowance_info.used / 60 }} hours</p>
+            <p>Free Parking Remaining: {{ free_allowance_info.remaining / 60 }} hours</p>
+            <p class="text-muted">Note: This includes a 1-hour grace period per session.</p>
+          {% elif free_allowance_info.allowed == 2 %} {# Admin free spots #}
+            <p>Total Free Spots Allowed: {{ free_allowance_info.allowed }}</p>
+            <p>Free Spots Currently Managed: {{ free_allowance_info.used }}</p>
+            <p>Free Spots Remaining: {{ free_allowance_info.remaining }}</p>
+          {% endif %}
+        </div>
+      </div>
+    {% endif %}
+
+    <div class="mt-4">
+      <a href="{{ url_for('subscriptions.view_plans') }}" class="btn btn-primary">Change Plan</a>
+    </div>
+  </div>
+</body>
+</html>

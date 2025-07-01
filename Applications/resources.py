@@ -6,6 +6,7 @@ from Applications.task import send_reservation_email
 from datetime import datetime, timedelta, time
 import math
 from sqlalchemy import event
+import os
 
 api = Api()
 
@@ -569,7 +570,238 @@ class AvailabilityResource(Resource):
         } for s in available_slots])
 
 
+class ParkingLotResource(Resource):
+    @auth_required('token')
+    @roles_required('admin')
+    def post(self):
+        admin_id = current_user.id
 
+        # Count lots created by this admin
+        existing_lots = ParkingLot.query.filter_by(admin_id=admin_id).count()
+
+        # Enforce limit unless subscription is active
+        if existing_lots >= 2:
+            subscription = UserSubscription.query.filter_by(user_id=admin_id, is_active=True).first()
+            if not subscription:
+                return {"message": "Upgrade subscription to add more than 2 parking lots"}, 403
+
+        # Get JSON safely
+        data = request.get_json()
+        print("Incoming data:", data)
+
+        # Validate required fields
+        required_fields = ['name', 'address', 'pin_code', 'rows', 'columns', 'price_per_hour', 'supervisor']
+        missing_fields = [field for field in required_fields if not data.get(field)]
+        if missing_fields:
+            return {"message": f"Missing fields: {', '.join(missing_fields)}"}, 400
+
+        # Get values with fallback
+        floors = int(data.get('floors', 1))
+        rows = int(data['rows'])
+        columns = int(data['columns'])
+
+        # Calculations
+        total_spots = rows * columns * floors
+        base_price = float(data['price_per_hour'])
+        cost_with_markup = round(base_price * (1 + 0.15 * (floors - 1)), 2)
+
+        try:
+            lot = ParkingLot(
+                name=data['name'],
+                address=data['address'],
+                pin_code=data['pin_code'],
+                rows=rows,
+                columns=columns,
+                floors=floors,
+                number_of_spots=total_spots,
+                price_per_hour=cost_with_markup,
+                supervisor_name=data['supervisor'],
+                charging_available=bool(data.get('charging_available', False)),
+                water_wash_available=bool(data.get('water_wash_available', False)),
+                other_services=data.get('other_services', ''),
+                admin_id=admin_id
+            )
+
+            db.session.add(lot)
+            db.session.commit()
+
+            lot.initialize_slots()
+
+            return {"message": "Parking lot created successfully"}, 201
+
+        except Exception as e:
+            db.session.rollback()
+            return {"message": f"Error creating lot: {str(e)}"}, 500
+
+    @auth_required('token')
+    @roles_required('admin')
+    def put(self):
+        lot_id = request.args.get('lot_id')
+        if not lot_id:
+            return {"message": "Parking lot ID is required"}, 400
+
+        lot = ParkingLot.query.get(lot_id)
+        if not lot:
+            return {"message": "Parking lot not found"}, 404
+
+        data = request.get_json()
+        if not data:
+            return {"message": "No update data provided"}, 400
+
+        # Update only metadata, not slots
+        lot.name = data.get('name', lot.name)
+        lot.address = data.get('address', lot.address)
+        lot.pin_code = data.get('pin_code', lot.pin_code)
+        lot.price_per_hour = data.get('price_per_hour', lot.price_per_hour)
+        lot.supervisor_name = data.get('supervisor_name', lot.supervisor_name)
+        lot.rows = data.get('rows', lot.rows)
+        lot.columns = data.get('columns', lot.columns)
+        lot.floors = data.get('floors', lot.floors)
+        lot.charging_available = data.get('charging_available', lot.charging_available)
+        lot.water_wash_available = data.get('water_wash_available', lot.water_wash_available)
+        lot.other_services = data.get('other_services', lot.other_services)
+
+        # Calculate and update spot count only if user explicitly sends it
+        if 'number_of_spots' in data:
+            lot.number_of_spots = data['number_of_spots']
+
+        db.session.commit()
+        return {"message": "Parking lot updated successfully"}, 200
+
+    @auth_required('token')
+    @roles_required('admin')
+    def delete(self):
+        lot_id = request.args.get('id')
+        lot = ParkingLot.query.get(lot_id)
+        if not lot:
+            return {"message": "Parking lot not found"}, 404
+
+        db.session.delete(lot)
+        db.session.commit()
+        return {"message": "Parking lot deleted successfully"}, 200
+    
+    @auth_required('token')
+    @roles_accepted('admin', 'user')
+    def get(self, lot_id=None):
+        if lot_id:
+            # Single parking lot request
+            lot = ParkingLot.query.get(lot_id)
+            if not lot:
+                return {"message": "Parking lot not found"}, 404
+            
+            # Check admin access if needed
+            if 'admin' in [role.name for role in current_user.roles] and lot.admin_id != current_user.id:
+                return {"message": "Unauthorized access to this parking lot"}, 403
+            
+            # Calculate availability
+            total_spots = lot.number_of_spots or (lot.rows * lot.columns * lot.floors)
+            booked_spots = ParkingSpot.query.filter_by(lot_id=lot.id, status='O').count()
+            available_spots = total_spots - booked_spots
+            
+            return {
+                "id": lot.id,
+                "name": lot.name,
+                "address": lot.address,
+                "pin_code": lot.pin_code,
+                "price_per_hour": lot.price_per_hour,
+                "rows": lot.rows,
+                "columns": lot.columns,
+                "floors": lot.floors,
+                "supervisor_name": lot.supervisor_name,
+                "charging_available": lot.charging_available,
+                "water_wash_available": lot.water_wash_available,
+                "other_services": lot.other_services,
+                "total_spots": total_spots,
+                "booked_spots": booked_spots,
+                "available_spots": available_spots,
+                "image_url": f"/static/uploads/{lot.id}.jpg" if os.path.exists(f"static/uploads/{lot.id}.jpg") else None,
+                "admin_id": lot.admin_id
+            }, 200
+        else:
+            # Multiple parking lots request
+            if 'admin' in [role.name for role in current_user.roles]:
+                # Return only admin's lots
+                lots = ParkingLot.query.filter_by(admin_id=current_user.id).all()
+            else:
+                # Return all active lots for users
+                lots = ParkingLot.query.all()
+
+            if not lots:
+                return {"message": "No parking lots available at the moment"}, 404
+
+            lots_json = []
+            for lot in lots:
+                total_spots = lot.number_of_spots or (lot.rows * lot.columns * lot.floors)
+                booked_spots = ParkingSpot.query.filter_by(lot_id=lot.id, status='O').count()
+                available_spots = total_spots - booked_spots
+                
+                lots_json.append({
+                    "id": lot.id,
+                    "name": lot.name,
+                    "address": lot.address,
+                    "pin_code": lot.pin_code,
+                    "price_per_hour": lot.price_per_hour,
+                    "rows": lot.rows,
+                    "columns": lot.columns,
+                    "floors": lot.floors,
+                    "supervisor_name": lot.supervisor_name,
+                    "total_spots": total_spots,
+                    "booked_spots": booked_spots,
+                    "available_spots": available_spots,
+                    "image_url": f"/static/uploads/{lot.id}.jpg" if os.path.exists(f"static/uploads/{lot.id}.jpg") else None,
+                    "charging_available": lot.charging_available,
+                    "water_wash_available": lot.water_wash_available
+                })
+            
+            return lots_json, 200
+
+UPLOAD_FOLDER = 'static/uploads'
+
+from flask import Flask
+
+app = Flask(__name__)
+
+@app.route('/api/parking_lot/upload_image/<int:lot_id>', methods=['POST'])
+@auth_required('token')
+@roles_required('admin')
+def upload_image(lot_id):
+    if 'file' not in request.files:
+        return {"message": "No file uploaded"}, 400
+    file = request.files['file']
+    os.makedirs(UPLOAD_FOLDER, exist_ok=True)
+    path = os.path.join(UPLOAD_FOLDER, f"{lot_id}.jpg")
+    file.save(path)
+    return {"message": "Image uploaded successfully", "url": f"/{path}"}, 200
+
+from werkzeug.security import generate_password_hash
+class UserProfileResource(Resource):
+    method_decorators = [auth_required('token')]  # apply decorator to all methods
+    @roles_accepted('user', 'admin')
+    def get(self):
+        user = current_user
+        return jsonify({
+            "id": user.id,
+            "username": user.username,
+            "email": user.email,
+            "roles": [role.name for role in user.roles]
+        })
+    @roles_accepted('user', 'admin')
+    def put(self):
+        data = request.get_json()
+        user = current_user
+
+        if 'username' in data:
+            user.username = data['username']
+        if 'email' in data:
+            existing_user = User.query.filter(User.email == data['email'], User.id != user.id).first()
+            if existing_user:
+                return {"message": "Email already in use"}, 400
+            user.email = data['email']
+        if 'password' in data and data['password']:
+            user.password = generate_password_hash(data['password'])
+
+        db.session.commit()
+        return {"message": "Profile updated successfully"}, 200
 
 # --- Routes for Admin and User ---
 api.add_resource(ParkingLotResource, '/api/parking_lot', '/api/parking_lot/<int:lot_id>')
@@ -582,7 +814,24 @@ api.add_resource(UserReservationResource, '/api/user/reservations')
 api.add_resource(UserSubscriptionResource, '/api/user/subscriptions')
 api.add_resource(PaymentResource, '/api/payments')
 api.add_resource(ValetResource, '/api/valet')
+api.add_resource(UserProfileResource, '/api/user/profile')
 
 # --- Subscription Plans ---
 api.add_resource(SubscriptionResource, '/api/subscriptions', "/api/subscriptions/<int:plan_id>")
 api.add_resource(AdminSubscriptionResource, '/api/admin/subscriptions')
+
+
+
+    # Register resources with the API instance
+# api.add_resource(ParkingLotResource, '/api/parking_lot', '/api/parking_lot/<int:lot_id>')
+# api.add_resource(SlotResource, '/api/lots/<int:lot_id>/slots')
+# api.add_resource(ReservationResource, '/api/reservations')
+# api.add_resource(AvailabilityResource, '/api/lots/<int:lot_id>/availability')
+# api.add_resource(UserReservationResource, '/api/user/reservations')
+# api.add_resource(UserSubscriptionResource, '/api/user/subscriptions')
+# api.add_resource(PaymentResource, '/api/payments')
+# api.add_resource(ValetResource, '/api/valet')
+# api.add_resource(SubscriptionResource, '/api/subscriptions', "/api/subscriptions/<int:plan_id>")
+# api.add_resource(AdminSubscriptionResource, '/api/admin/subscriptions')
+
+

@@ -1,0 +1,40 @@
+<h2>Choose Your Plan</h2>
+
+<h3>User Plans</h3>
+<div class="plan-cards">
+    {% for plan in user_plans %}
+    <div class="card">
+        <h4>{{ plan.name }}</h4>
+        <p>{{ plan.description }}</p>
+        <p>Price: ${{ plan.price }} / {{ plan.billing_interval }}</p>
+        {% if plan.name == 'Free Roam' %}
+            <p>Allowance: {{ plan.max_parking_hours_monthly }} hours free (3 hours parking + 1 hour grace)</p>
+        {% else %}
+            <p>Allowance: {{ plan.max_parking_hours_monthly }} hours/month</p>
+            {% if plan.name == 'Commuter Pro' %}
+                <p class="compliment">Your daily commute just got smarter and smoother. Enjoy the peace of mind that comes with guaranteed convenience!</p>
+            {% elif plan.name == 'Elite Parker' %}
+                <p class="compliment">Unlock the city with unparalleled parking freedom. Your journey, elevated – always a prime spot, always effortless!</p>
+            {% endif %}
+        {% endif %}
+        <a href="{{ url_for('subscriptions.subscribe_to_plan', plan_id=plan.id) }}" class="btn">Select Plan</a>
+    </div>
+    {% endfor %}
+</div>
+
+<h3>Admin Plans</h3>
+<div class="plan-cards">
+    {% for plan in admin_plans %}
+    <div class="card">
+        <h4>{{ plan.name }}</h4>
+        <p>{{ plan.description }}</p>
+        <p>Price: ${{ plan.price }} / {{ plan.billing_interval }}</p>
+        {% if plan.name == 'Spot Scout' %}
+            <p>Allowance: {{ plan.max_spots }} free spots</p>
+        {% else %}
+            <p>Allowance: {{ plan.max_spots }} spots</p>
+        {% endif %}
+        <a href="{{ url_for('subscriptions.subscribe_to_plan', plan_id=plan.id) }}" class="btn">Select Plan</a>
+    </div>
+    {% endfor %}
+</div>
