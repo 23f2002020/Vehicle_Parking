@@ -46,44 +46,80 @@ with app.app_context():
             roles=['user']
         )
 
-    if not SubscriptionPlan.query.first():
-        plans = [
+    
+        if not SubscriptionPlan.query.first():
+            user_plans = [
+                SubscriptionPlan(
+                    name="1-month Free Roam",
+                    plan_type="user",
+                    billing_interval="monthly",
+                    duration_days=30,
+                    price=1299,
+                    free_parkings=2,
+                    free_washes=0,
+                    currency='INR',
+                    description="Basic plan with 2 free parkings"
+                ),
+                SubscriptionPlan(
+                    name="6-month Commuter Pro",
+                    plan_type="user",
+                    billing_interval="monthly",
+                    duration_days=180,
+                    price=4499,
+                    free_parkings=15,
+                    free_washes=3,
+                    currency='INR',
+                    description="Popular plan with 15 parkings and 3 free washes"
+                ),
+                SubscriptionPlan(
+                    name="1-year Elite Parker",
+                    plan_type="user",
+                    billing_interval="annually",
+                    duration_days=365,
+                    price=9599,
+                    free_parkings=31,
+                    free_washes=10,
+                    currency='INR',
+                    description="Best value with 31 parkings and 10 free washes"
+                )
+            ]
+            
+            admin_plans = [   
             SubscriptionPlan(
-                name="1-month",
-                plan_type="user",
+                name="Admin Basic",
+                plan_type="admin",
                 billing_interval="monthly",
                 duration_days=30,
-                price=1299,
-                free_parkings=2,
-                free_washes=0,
+                price=1999,
+                max_spots=5,        # max number of lots or spots for admin
                 currency='INR',
-                description="Basic plan with 2 free parkings"
+                description="Allows up to 5 parking lots/spots"
             ),
             SubscriptionPlan(
-                name="6-month",
-                plan_type="user",
+                name="Admin Pro",
+                plan_type="admin",
                 billing_interval="monthly",
-                duration_days=180,
-                price=4499,
-                free_parkings=15,
-                free_washes=3,
+                duration_days=30,
+                price=4999,
+                max_spots=20,
                 currency='INR',
-                description="Popular plan with 15 parkings and 3 free washes"
+                description="Allows up to 20 parking lots/spots"
             ),
             SubscriptionPlan(
-                name="1-year",
-                plan_type="user",
+                name="Admin Unlimited",
+                plan_type="admin",
                 billing_interval="annually",
                 duration_days=365,
-                price=9599,
-                free_parkings=31,
-                free_washes=10,
+                price=14999,
+                max_spots=None,    # Unlimited
                 currency='INR',
-                description="Best value with 31 parkings and 10 free washes"
+                description="Unlimited parking lot/spots for 1 year"
             )
         ]
-        db.session.add_all(plans)
-    db.session.commit()
+
+        
+        db.session.add_all(user_plans + admin_plans)
+        db.session.commit()
 
 @app.route('/static/uploads/<filename>')
 def uploaded_file(filename):

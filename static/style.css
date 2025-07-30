@@ -1247,3 +1247,112 @@ input.form-control {
   background: #f9f9f9;
   border-radius: 8px;
 }
+
+.payment-bg {
+  background: linear-gradient(135deg,#e9e5ff 0%, #c9e7ff 60%, #ffeded 100%);
+  min-height: 100vh;
+}
+.payment-panel {
+  max-width: 500px;
+  border-radius: 1.5rem;
+  box-shadow: 0 8px 48px 10px #a0c9fa60;
+  background: #fff;
+}
+.text-gradient {
+  background: linear-gradient(90deg, #4e54c8 0%, #43cea2 100%);
+  -webkit-background-clip: text;
+  -webkit-text-fill-color: transparent;
+}
+.bg-gradient-pill {
+  background: linear-gradient(90deg, #f3c5ff 0%, #c9eaff 100%);
+  border-radius: 100px;
+}
+.gradient-btn {
+  background: linear-gradient(90deg, #4e54c8 0%, #43cea2 100%);
+  color: #fff;
+  border: none;
+  transition: box-shadow .2s, background .3s;
+  box-shadow: 0 2px 16px #4e54c880;
+}
+.gradient-btn:hover {
+  background: linear-gradient(100deg, #43cea2 10%, #4e54c8 70%);
+  color: #fff;
+  box-shadow: 0 4px 36px #78f6e71a;
+}
+.pay-method-icon {
+  min-width: 100px;
+  text-align: center;
+  cursor: pointer;
+  padding: 1.2rem .4rem .7rem .4rem;
+  border-radius: 18px;
+  color: #7a859f;
+  border: 2px solid #fff;
+  background: #f7fcff;
+  transition: all .22s;
+  font-weight: 500;
+  box-shadow: 0 1px 5px #8ea3b125;
+}
+.pay-method-active {
+  background: linear-gradient(87deg,#e0ebfa 2%,#e9e8fd 90%);
+  color: #4051ff;
+  border-color: #7bc4ff;
+  transform: scale(1.07);
+  box-shadow: 0 4px 12px #60b8fc30;
+}
+.card-ui {
+  background: #f6f8fb;
+  border: 1.5px solid #e0eafd;
+  border-radius: 1.2rem;
+}
+.card-field:focus {
+  outline: none;
+  box-shadow: 0 0 0 2px #82e9e6 !important;
+  border-color: #4e82e6 !important;
+}
+.animate__animated { animation-duration: 0.8s; }
+
+.admin-dashboard-container {
+  padding: 32px;
+  background: #f8fafc;
+  min-height: 100vh;
+  font-family: 'Inter', sans-serif;
+}
+.admin-header h1 {
+  color: #1e293b;
+  margin-bottom: 12px;
+}
+.dashboard-card {
+  background: #fff;
+  border-radius: 10px;
+  box-shadow: 0 2px 10px rgba(21,32,44,0.1);
+  margin: 12px;
+  padding: 24px 18px;
+  min-width: 350px;
+  min-height: 300px;
+}
+.charts-grid {
+  display: flex;
+  flex-direction: row;
+  gap: 24px;
+}
+.lots-table-and-charts {
+  display: flex;
+}
+.lots-table {
+  flex: 3;
+}
+.charts-grid {
+  flex: 2;
+  display: flex;
+  flex-direction: column;
+}
+/* Responsive layout for small screens */
+@media (max-width: 1000px) {
+  .lots-table-and-charts {
+    flex-direction: column;
+  }
+  .charts-grid {
+    flex-direction: row;
+    gap: 12px;
+  }
+}

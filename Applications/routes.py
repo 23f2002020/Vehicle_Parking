@@ -73,22 +73,25 @@ def custom_login():
     data = request.get_json()
     email = data.get('email')
     password = data.get('password')
+    login_as = data.get('login_as')  # <-- must exist!
 
-    if not email or not password:
-        return jsonify({"message": "Email and password are required"}), 400
+    if not email or not password or not login_as:
+        return jsonify({"message": "All fields required"}), 400
 
     user = User.query.filter_by(email=email).first()
     if not user:
         return jsonify({"message": "User not found"}), 404
 
-    if current_user.is_authenticated:
-        logout_user()
-
+    user_roles = [role.name for role in user.roles]
+    # If login_as is not part of user roles, reject
+    if login_as not in user_roles:
+        return jsonify({"message": f"No such role {login_as} for this account."}), 403
+    
+    # Your password checking logic here
     if not verify_and_update_password(password, user):
         return jsonify({"message": "Incorrect password"}), 401
 
     login_user(user)
-    user_roles = [role.name for role in user.roles]
 
     return jsonify({
         "message": "Login successful",
@@ -96,7 +99,7 @@ def custom_login():
             "auth_token": user.get_auth_token(),
             "username": user.username,
             "email": user.email,
-            "roles": user_roles
+            "roles": [login_as]
         }
     }), 200
 
@@ -151,6 +154,11 @@ def update_user_profile():
         user.email = data['email']
     if 'password' in data and data['password']:
         user.password = generate_password_hash(data['password'])
+    if 'phone' in data:
+        user.phone = data['phone']
+    if 'address' in data:
+        user.address = data['address']
+    
 
     db.session.commit()
     return jsonify({"message": "Profile updated successfully"}), 200
@@ -321,26 +329,69 @@ def delete_subscription_plan(plan_id):
 @app.route('/api/initiate-payment', methods=['POST'])
 @auth_required('token')
 def initiate_payment():
-    """Mock payment initiation endpoint for demo"""
     data = request.get_json()
-
-    if not data or 'plan_id' not in data:
+    plan_id = data.get('plan_id')
+    
+    if not plan_id:
         return jsonify({"message": "Plan ID is required"}), 400
-
-    plan = SubscriptionPlan.query.get(data['plan_id'])
+        
+    plan = SubscriptionPlan.query.get(plan_id)
     if not plan:
-        return jsonify({"message": "Invalid subscription plan"}), 400
-
-    mock_order = {
-        "order_id": f"mock_order_{datetime.now().strftime('%Y%m%d%H%M%S')}",
-        "amount": plan.price * 100,  # in paise
-        "currency": "INR",
-        "status": "created",
-        "plan_id": plan.id,
-        "mock_payment_id": f"mock_py_{datetime.now().strftime('%Y%m%d%H%M%S')}"
-    }
-
-    return jsonify(mock_order)
+        return jsonify({"message": "Invalid subscription plan"}), 404
+        
+    # Use dummy gateway
+    from .dummy_gateway import DummyPaymentGateway
+    gateway = DummyPaymentGateway()
+    
+    # Process payment
+    result = gateway.process_payment(float(plan.price))
+    
+    if result['status'] == 'success':
+        # Create subscription
+        if plan.plan_type == 'user':
+            subscription = UserSubscription(
+                user_id=current_user.id,
+                plan_id=plan.id,
+                start_date=datetime.utcnow(),
+                end_date=datetime.utcnow() + timedelta(days=plan.duration_days),
+                status='active'
+            )
+        else:
+            subscription = AdminSubscription(
+                admin_id=current_user.id,
+                plan_id=plan.id,
+                start_date=datetime.utcnow(),
+                end_date=datetime.utcnow() + timedelta(days=plan.duration_days),
+                status='active'
+            )
+            
+        # Create transaction record
+        transaction = PaymentTransaction(
+            user_id=current_user.id,
+            amount=plan.price,
+            transaction_id=result['transaction_id'],
+            payment_method='card',
+            status='completed'
+        )
+        
+        db.session.add(subscription)
+        db.session.add(transaction)
+        db.session.commit()
+        
+        return jsonify({
+            "message": "Payment successful",
+            "transaction_id": result['transaction_id'],
+            "subscription": {
+                "id": subscription.id,
+                "plan_name": plan.name,
+                "end_date": subscription.end_date.isoformat()
+            }
+        }), 201
+    else:
+        return jsonify({
+            "message": "Payment failed",
+            "error": result['message']
+        }), 400
 
 @app.route('/api/mock-payment-callback', methods=['POST'])
 @auth_required('token')
@@ -410,4 +461,78 @@ def verify_payment(payment_id):
         "amount": transaction.amount,
         "subscription_active": subscription.is_active if subscription else False,
         "remaining_parkings": subscription.remaining_parkings if subscription else 0
+    })
+
+@app.route('/profile')
+@auth_required('token')
+def profile():
+    if 'admin' in [role.name for role in current_user.roles]:
+        return render_template('admin_profile.html')
+    else:
+        return render_template('user_profile.html')
+    
+@app.route('/api/admin/summary', methods=['GET'])
+@auth_required('token')
+@roles_required('admin')
+def admin_summary():
+    total_earnings = db.session.query(db.func.sum(PaymentTransaction.amount)).scalar() or 0
+    bookings = Reservation.query.count()
+    return jsonify({
+        'earnings': float(total_earnings),
+        'total_bookings': bookings,
+        'rating': 4.5,
+        'chart_data': []
+    }), 200
+
+@app.route('/api/payments', methods=['GET'])
+@auth_required('token')
+@roles_required('user')
+def get_payments():
+    transactions = PaymentTransaction.query.filter_by(user_id=current_user.id).all()
+    return jsonify([{
+        'id': t.id,
+        'amount': float(t.amount),
+        'method': t.payment_method,
+        'status': t.status,
+        'date': t.timestamp.strftime('%Y-%m-%d')
+    } for t in transactions]), 200
+
+@app.route('/api/admin/dashboard-charts', methods=['GET'])
+@auth_required('token')
+@roles_required('admin')
+def admin_dashboard_charts():
+    # Example: get last 7 days earning and most booked slot
+    days = 7
+    today = datetime.utcnow()
+    earnings = []
+    bookings_per_day = []
+    most_booked_slots = {}
+    for i in range(days):
+        day = today - timedelta(days=days-i-1)
+        start = datetime(day.year, day.month, day.day)
+        end = start + timedelta(days=1)
+        day_earning = db.session.query(db.func.sum(PaymentTransaction.amount)).filter(
+            PaymentTransaction.timestamp >= start,
+            PaymentTransaction.timestamp < end,
+            PaymentTransaction.payment_type == 'reservation'
+        ).scalar() or 0
+        earnings.append(float(day_earning))
+        day_bookings = Reservation.query.filter(
+            Reservation.start_datetime >= start,
+            Reservation.end_datetime < end
+        ).count()
+        bookings_per_day.append(day_bookings)
+        slot_bookings = db.session.query(Reservation.slot_id, db.func.count(Reservation.id)).filter(
+            Reservation.start_datetime >= start,
+            Reservation.end_datetime < end
+        ).group_by(Reservation.slot_id).all()
+        for slot_id, cnt in slot_bookings:
+            most_booked_slots[slot_id] = most_booked_slots.get(slot_id, 0) + cnt
+    # Most booked slot overall:
+    most_booked = max(most_booked_slots.items(), key=lambda x: x[1]) if most_booked_slots else (None, 0)
+    return jsonify({
+        "earnings": earnings,
+        "bookings_per_day": bookings_per_day,
+        "days": [(today - timedelta(days=days-i-1)).strftime("%a") for i in range(days)],
+        "most_booked_slot": {"slot_id": most_booked[0], "count": most_booked[1]}
     })

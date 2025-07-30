@@ -14,8 +14,17 @@ const routes = [
     {path: '/register',component: Register},
     {path: '/dashboard',component: dashboard},
     {path: '/admin/dashboard',component: admin_Page},
-    {path: '/booking', component: booking, name: 'booking'}
-]
+    {path: '/booking', component: booking, name: 'booking'},
+    
+  { path: '/profile', component: () => import('./components/profile.js') },
+  { path: '/subscriptions', component: () => import('./components/subscription.js') },
+  { path: '/reservations', component: () => import('./components/dashboard.js') },
+  { path: '/MyBookings', component: () => import('./components/mybooking.js') },
+  { path: '/payments', component: () => import('./components/payment.js'), name: 'payments' },
+  { path: '/transaction', component: () => import('./components/payment.js'), name: 'transaction' },
+  { path: '/admin/subscriptions', component: () => import('./components/adminSubscription.js'), name: 'adminSubscriptions'}
+];
+
 
 const router = new VueRouter({
     routes
