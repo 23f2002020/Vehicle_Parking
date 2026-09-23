@@ -1,51 +1,38 @@
+"""Simulated payment gateway (no real money moves).
+
+Deterministic rules so every scenario can be tested by hand:
+
+    card  ....0002   -> declined (issuer)
+    card  ....9995   -> declined (insufficient funds)
+    UPI   fail@xxx   -> declined
+    anything else    -> success
+
+Test cards that pass validation (Luhn):  4111 1111 1111 1111 , 5555 5555 5555 4444
+Test card that is declined:              4000 0000 0000 0002
+"""
 import uuid
-import random
+
 
 class DummyPaymentGateway:
-    """
-    A simulated payment gateway for development and testing.
-    Mimics success and failure scenarios based on amount.
-    """
     @staticmethod
-    def process_payment(amount, currency="USD", card_number=""):
-        """
-        Simulates a payment transaction.
-        - Amounts ending in.00 or.01 simulate success.
-        - Amounts ending in.02 simulate failure (e.g., card declined).
-        - Other amounts can be configured for different scenarios.
-        """
-        transaction_id = str(uuid.uuid4())
-        status = 'failed'
-        message = 'Payment failed.'
+    def process_payment(amount, currency="INR", method="card", card_number="", upi_id=""):
+        txn_id = "TXN" + uuid.uuid4().hex[:14].upper()
+        status, message = "success", "Payment successful."
 
-        # Simple logic to simulate success/failure for testing
-        if amount % 1 == 0 or amount % 1 == 0.01: # Amounts like 10.00, 15.01
-            status = 'success'
-            message = 'Payment successful.'
-        elif amount % 1 == 0.02: # Amounts like 20.02
-            status = 'failed'
-            message = 'Card declined.'
-        else: # Random failures for other amounts
-            if random.random() < 0.8: # 80% success rate for other amounts
-                status = 'success'
-                message = 'Payment successful.'
-            else:
-                status = 'failed'
-                message = 'Transaction error.'
+        if method == "card":
+            digits = "".join(ch for ch in (card_number or "") if ch.isdigit())
+            if digits.endswith("0002"):
+                status, message = "failed", "Card declined by the issuing bank."
+            elif digits.endswith("9995"):
+                status, message = "failed", "Insufficient funds."
+        elif method == "upi":
+            if (upi_id or "").lower().startswith("fail"):
+                status, message = "failed", "UPI request declined."
 
-        return {
-            'status': status,
-            'transaction_id': transaction_id,
-            'message': message,
-            'amount': amount,
-            'currency': currency
-        }
+        return {"status": status, "transaction_id": txn_id, "message": message,
+                "amount": amount, "currency": currency}
 
     @staticmethod
     def get_test_card_numbers():
-        """Provides dummy card numbers for testing different scenarios."""
-        return {
-            'success_card': '4111222233334444', # Simulates success with specific amount logic
-            'declined_card': '4000111122223333', # Simulates decline with specific amount logic
-            'generic_card': '4555666677778888' # Simulates random success/failure
-        }
+        return {"success": "4111111111111111", "success_mastercard": "5555555555554444",
+                "declined": "4000000000000002", "insufficient_funds": "4000000000009995"}

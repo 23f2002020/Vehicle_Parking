@@ -1,0 +1,49 @@
+# docker compose up --build      ->  http://localhost:5000
+# Runs Redis + the web app + a Celery worker + Celery beat, sharing one SQLite volume.
+x-app: &app
+  build: .
+  environment: &env
+    REDIS_URL: redis://redis:6379/0
+    HOST: 0.0.0.0
+    FLASK_DEBUG: "0"
+    APP_ENV: development          # keeps the demo data and the demo clock; use "production" for a real deployment
+    SECRET_KEY: ${SECRET_KEY:-change-me-in-a-real-deployment}
+    SECURITY_PASSWORD_SALT: ${SECURITY_PASSWORD_SALT:-change-me-too}
+    MAIL_SERVER: ${MAIL_SERVER:-}
+    MAIL_USERNAME: ${MAIL_USERNAME:-}
+    MAIL_PASSWORD: ${MAIL_PASSWORD:-}
+  volumes:
+    - vp_instance:/app/instance
+  depends_on:
+    redis:
+      condition: service_healthy
+
+services:
+  redis:
+    image: redis:7-alpine
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+
+  web:
+    <<: *app
+    command: python app.py
+    ports:
+      - "5000:5000"
+    restart: unless-stopped
+
+  worker:
+    <<: *app
+    command: celery -A Applications.celery_worker.celery worker -l info
+    restart: unless-stopped
+
+  beat:
+    <<: *app
+    command: celery -A Applications.celery_worker.celery beat -l info --schedule /tmp/celerybeat-schedule
+    restart: unless-stopped
+
+volumes:
+  vp_instance:

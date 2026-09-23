@@ -1,22 +1,23 @@
-from celery import Celery
-from flask import Flask
-from Applications.config import LocalConfig
-from Applications.email import init_mail
-from Applications.database import db
+"""Entry point for the Celery worker and Celery beat.
 
-def make_celery(app_name=__name__):
-    flask_app = Flask(app_name)
-    flask_app.config.from_object(LocalConfig)
-    db.init_app(flask_app)
-    init_mail(flask_app)
+    celery -A Applications.celery_worker.celery worker -l info            (Linux / macOS)
+    celery -A Applications.celery_worker.celery worker -l info --pool=solo   (Windows)
+    celery -A Applications.celery_worker.celery beat   -l info            (periodic jobs)
 
-    celery = Celery(
-        app_name,
-        broker='redis://localhost:6379/0',
-        backend='redis://localhost:6379/0'
-    )
-    celery.conf.update(flask_app.config)
-    celery.flask_app = flask_app
-    return celery
+Redis must be running (docker compose up redis  /  redis-server  /  WSL / Memurai on Windows).
+Don't have Redis? Skip this file entirely - the web app falls back to running its background
+jobs in-process (see TASK_MODE in Applications/config.py).
+"""
+try:
+    from dotenv import load_dotenv
+    load_dotenv()
+except ImportError:
+    pass
 
-celery = make_celery()
+from Applications.factory import create_app
+
+flask_app = create_app(role="worker")
+celery = flask_app.extensions["celery"]
+
+# importing the module registers every @shared_task with this Celery app
+import Applications.task  # noqa: E402,F401
